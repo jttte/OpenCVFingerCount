@@ -32,12 +32,14 @@ pair<Point,double> circleFromPoints(Point p1, Point p2, Point p3);
 int main(int argc, const char * argv[])
 {
     
-    src = imread( "/Users/lucylin/Dropbox/class/VI/img/med_5.jpg", 1 );
+    src = imread( "/Users/lucylin/Dropbox/class/VI/img/med_4.jpg", 1 );
     resize(src, src, Size(src.cols/4, src.rows/4));
     cvtColor( src, src_gray, CV_BGR2GRAY );
     blur( src_gray, src_gray, Size(5,5) );
     threshold(src_gray, src_bw, 0, 255, CV_THRESH_BINARY | CV_THRESH_OTSU);
     blur( src_bw, src_bw, Size(3,3) );
+    //set 4 boundaries to 0 so that we can have closed contour
+    copyMakeBorder( src_bw, src_bw, 4, 4, 4, 4, BORDER_CONSTANT, Scalar(0,0,0) );
     
     namedWindow( "Source", CV_WINDOW_AUTOSIZE );
     imshow( "Source", src );
@@ -63,7 +65,7 @@ void thresh_callback(int, void* )
     Canny( src_bw, canny_output, thresh, thresh*2);
     
     /// Find contours
-    findContours( canny_output, contours, hierarchy, CV_RETR_EXTERNAL, CHAIN_APPROX_SIMPLE, Point(0, 0) );
+    findContours( canny_output, contours, hierarchy, CV_RETR_EXTERNAL, CV_CHAIN_APPROX_NONE, Point(0, 0) );
     //showImage(canny_output, "canny");
     
     /// Draw contours
@@ -71,7 +73,7 @@ void thresh_callback(int, void* )
     for( int i = 0; i< contours.size(); i++ )
     {
         Scalar color = Scalar( rng.uniform(0, 255), rng.uniform(0,255), rng.uniform(0,255) );
-        drawContours( drawing, contours, i, color, 2, 8, hierarchy, 0, Point() );
+        drawContours( drawing, contours, i, color, 1, 8, hierarchy, 0, Point() );
     }
     
     /// Show in a window
@@ -84,36 +86,59 @@ void thresh_callback(int, void* )
     vector<vector<int> > hullsI(contours.size());
     for( int i = 0; i < contours.size(); i++ )
     {
-        convexHull(contours[i], hullsI[i], false, false);
-        convexHull(contours[i], hullsP[i], false, true);
-        if (contours[i].size() >3 )
-        {
-            convexityDefects(contours[i], hullsI[i], defects[i]);
-            cout<<defects[i].size()<<endl;
-        }
+        if (contours[i].size() < 500)
+            continue;
+        convexHull(Mat(contours[i]), hullsI[i], false, false);
+        //if a segment is too short, remove it.
+//        vector<int>::iterator iter =hullsI[i].begin();
+//        int last = hullsI[i][0];
+//        iter++;
+//        while( iter!=hullsI[i].end() )
+//        {
+//            if(last-*iter <  5)
+//            {
+//                hullsI[i].erase(iter);
+//            } else {
+//                last = *iter;
+//                iter++;
+//            }
+//            cout<<hullsI[i].size()<<endl;
+//        }
+        
+        convexHull(Mat(contours[i]), hullsP[i], false, true);
+        convexityDefects(contours[i], hullsI[i], defects[i]);
         if(defects[i].size()>=3)
         {
+            cout<<"#defects: "<<defects[i].size()<<endl;
             vector<Vec4i>::iterator d =defects[i].begin();
             vector<Point> palm_points;
             Point rough_palm_center;
             while( d!=defects[i].end() )
             {
                 Vec4i& v=(*d);
+                //cout<<v[3]/256<<endl;
+                if(abs(v[1]-v[0]) < 5) {
+                    //cout<<v[1]<<" "<<v[0]<<endl;
+                    defects[i].erase(d);
+                    //cout<<"size now = "<<defects[i].size()<<endl;
+                }
+                else {
                 int startidx=v[0];; Point ptStart( contours[i][startidx] );
                 int endidx=v[1]; Point ptEnd( contours[i][endidx] );
                 int faridx=v[2]; Point ptFar( contours[i][faridx] );
                 //Sum up all the hull and defect points to compute average
-                rough_palm_center+=ptFar+ptStart+ptEnd;
-                palm_points.push_back(ptFar);
+                rough_palm_center+=ptStart+ptEnd;
+                //palm_points.push_back(ptFar);
                 palm_points.push_back(ptStart);
                 palm_points.push_back(ptEnd);
                 d++;
+                }
             }
             
             //Get palm center by 1st getting the average of all defect points, this is the rough palm center,
             //Then U chose the closest 3 points ang get the circle radius and center formed from them which is the palm center.
-            rough_palm_center.x/=defects.size()*3;
-            rough_palm_center.y/=defects.size()*3;
+            rough_palm_center.x/=defects.size()*2;
+            rough_palm_center.y/=defects.size()*2;
             Point closest_pt=palm_points[0];
             vector<pair<double,int> > distvec;
             for(int i=0;i<palm_points.size();i++)
@@ -169,18 +194,32 @@ void thresh_callback(int, void* )
                 double length=sqrt(dist(ptFar,ptStart));
                 
                 double retLength=sqrt(dist(ptEnd,ptFar));
+                Scalar colors = Scalar( rng.uniform(0, 255), rng.uniform(0,255), rng.uniform(0,255) );
+                //drawContours( drawing, hullsP, i, colors, 1, 8, vector<Vec4i>(), 0, Point() );
+                line( drawing, ptEnd, ptStart, colors, 3);
+                line( drawing, ptStart, ptFar, CV_RGB(0,255,0), 1 );
+                circle( drawing, ptFar,   4, Scalar(0,255,100), 2 );
+
                 //Play with these thresholds to improve performance
-                if(length<=3*radius&&Ydist>=0.4*radius&&length>=10&&retLength>=10&&max(length,retLength)/min(length,retLength)>=0.8)
+                //if(length<=3*radius&&Ydist>=0.4*radius&&length>=10&&retLength>=10&&max(length,retLength)/min(length,retLength)>=0.8)
+                //if (length<radius*2)
+                {
+
                     if(min(Xdist,Ydist)/max(Xdist,Ydist)<=0.8)
                     {
                         if((Xdist>=0.1*radius&&Xdist<=1.3*radius&&Xdist<Ydist)||(Ydist>=0.1*radius&&Ydist<=1.3*radius&&Xdist>Ydist))
-                            line( drawing, ptEnd, ptFar, Scalar(0,255,0), 1 ),no_of_fingers++;
+                        {
+                            //line( drawing, ptEnd, ptFar, Scalar(0,255,0), 1 );
+                            no_of_fingers++;
+                            circle( drawing, ptFar,   6, Scalar(255,0,100), 2 );
+                        }
                     }
+                }
                 
                 d++;
             }
             
-            no_of_fingers=min(5,no_of_fingers);
+            //no_of_fingers=min(5,no_of_fingers);
             cout<<"NO OF FINGERS: "<<no_of_fingers<<endl;
             
         }
@@ -190,49 +229,51 @@ void thresh_callback(int, void* )
     showImage(drawing, "convex");
     
     // Draw contours + hull results
-//    RNG rng;
-//    Mat hullDrawing = Mat::zeros( drawing.size(), CV_8UC3 );
-//    for( int i = 0; i< contours.size(); i++ )
-//    {
-//        Scalar color = Scalar( rng.uniform(0, 255), rng.uniform(0,255), rng.uniform(0,255) );
-//        drawContours( hullDrawing, contours, i, color, 1, 8, vector<Vec4i>(), 0, Point() );
-//        drawContours( hullDrawing, hullsP, i, color, 1, 8, vector<Vec4i>(), 0, Point() );
-//        
-//        size_t count = contours[i].size();
-//        std::cout<<"Count : "<<count<<std::endl;
-//        if( count < 300 )
-//            continue;
-//        vector<Vec4i>::iterator d =defects[i].begin();
-//        
-//        while( d!=defects[i].end() )
-//        {
-//            Vec4i& v=(*d);
-//            int startidx=v[0];
-//            Point ptStart( contours[i][startidx] ); // point of the contour where the defect begins
-//            int endidx=v[1];
-//            Point ptEnd( contours[i][endidx] ); // point of the contour where the defect ends
-//            int faridx=v[2];
-//            Point ptFar( contours[i][faridx] );// the farthest from the convex hull point within the defect
-//            int depth = v[3] / 256; // distance between the farthest point and the convex hull
-//            
-//            if(depth > 20 && depth < 80)
-//            {
-//                line( hullDrawing, ptStart, ptFar, CV_RGB(0,255,0), 2 );
-//                line( hullDrawing, ptEnd, ptFar, CV_RGB(0,255,0), 2 );
-//                //line( hullDrawing, ptStart, ptEnd, CV_RGB(0,255,0), 2 );
-//				circle( hullDrawing, ptStart,   4, Scalar(255,0,100), 2 );
-//				circle( hullDrawing, ptEnd,   4, Scalar(255,0,100), 2 );
-//                circle( hullDrawing, ptFar,   4, Scalar(100,0,255), 2 );
-//            }
-//            d++;
-//        }
-//        
-//    }
-//
-//
-//
-//    // Show in a window
-//    showImage(hullDrawing, "hull");
+    RNG rng;
+    Mat hullDrawing = Mat::zeros( drawing.size(), CV_8UC3 );
+    for( int i = 0; i< contours.size(); i++ )
+    {
+        Scalar color = Scalar( rng.uniform(0, 255), rng.uniform(0,255), rng.uniform(0,255) );
+        drawContours( hullDrawing, contours, i, color, 1, 8, vector<Vec4i>(), 0, Point() );
+        //drawContours( hullDrawing, hullsP, i, color, 1, 8, vector<Vec4i>(), 0, Point() );
+        
+        size_t count = contours[i].size();
+        std::cout<<"Count : "<<count<<std::endl;
+        if( count < 300 )
+            continue;
+        vector<Vec4i>::iterator d =defects[i].begin();
+        
+        while( d!=defects[i].end() )
+        {
+            Vec4i& v=(*d);
+            int startidx=v[0];
+            Point ptStart( contours[i][startidx] ); // point of the contour where the defect begins
+            int endidx=v[1];
+            Point ptEnd( contours[i][endidx] ); // point of the contour where the defect ends
+            int faridx=v[2];
+            Point ptFar( contours[i][faridx] );// the farthest from the convex hull point within the defect
+            int depth = v[3] / 256; // distance between the farthest point and the convex hull
+            
+            //if(depth > 30 && depth < 300 )
+            //{
+                cout<<depth<<endl;
+
+                line( hullDrawing, ptStart, ptFar, CV_RGB(0,255,0), 2 );
+                line( hullDrawing, ptEnd, ptFar, CV_RGB(0,255,0), 1 );
+                //line( hullDrawing, ptStart, ptEnd, CV_RGB(0,255,0), 2 );
+				circle( hullDrawing, ptStart,   4, Scalar(255,0,100), 1 );
+				circle( hullDrawing, ptEnd,   4, Scalar(255,0,100), 1 );
+                circle( hullDrawing, ptFar,   4, Scalar(100,0,255), 1 );
+            //}
+            d++;
+        }
+        
+    }
+
+
+
+    // Show in a window
+    showImage(hullDrawing, "hull");
 
 }
 
