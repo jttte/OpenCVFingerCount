@@ -28,6 +28,7 @@ void thresh_callback(int, void* );
 void showImage(Mat img, string name);
 double dist(Point x,Point y);
 pair<Point,double> circleFromPoints(Point p1, Point p2, Point p3);
+float angleBetween(const Point &p1, const Point &p2, const Point &center);
 
 int main(int argc, const char * argv[])
 {
@@ -37,6 +38,8 @@ int main(int argc, const char * argv[])
     cvtColor( src, src_gray, CV_BGR2GRAY );
     blur( src_gray, src_gray, Size(5,5) );
     threshold(src_gray, src_bw, 0, 255, CV_THRESH_BINARY | CV_THRESH_OTSU);
+    erode(src_bw, src_bw, Mat(), Point(-1, -1), 3);
+    dilate(src_bw, src_bw, Mat());
     blur( src_bw, src_bw, Size(3,3) );
     //set 4 boundaries to 0 so that we can have closed contour
     copyMakeBorder( src_bw, src_bw, 4, 4, 4, 4, BORDER_CONSTANT, Scalar(0,0,0) );
@@ -44,7 +47,7 @@ int main(int argc, const char * argv[])
     namedWindow( "Source", CV_WINDOW_AUTOSIZE );
     imshow( "Source", src );
     
-    //showImage(src_bw, "bw");
+    showImage(src_bw, "bw");
     
     createTrackbar( " Canny thresh:", "Source", &thresh, max_thresh, thresh_callback );
     thresh_callback( 0, 0 );
@@ -86,6 +89,7 @@ void thresh_callback(int, void* )
     vector<vector<int> > hullsI(contours.size());
     for( int i = 0; i < contours.size(); i++ )
     {
+        //ignore noisy contour
         if (contours[i].size() < 500)
             continue;
         convexHull(Mat(contours[i]), hullsI[i], false, false);
@@ -105,6 +109,9 @@ void thresh_callback(int, void* )
 //            cout<<hullsI[i].size()<<endl;
 //        }
         
+        //////////////////////////////////////////////////////
+        //delete noisy convex defects, try to find palm center
+        //////////////////////////////////////////////////////
         convexHull(Mat(contours[i]), hullsP[i], false, true);
         convexityDefects(contours[i], hullsI[i], defects[i]);
         if(defects[i].size()>=3)
@@ -116,29 +123,26 @@ void thresh_callback(int, void* )
             while( d!=defects[i].end() )
             {
                 Vec4i& v=(*d);
-                //cout<<v[3]/256<<endl;
                 if(abs(v[1]-v[0]) < 5) {
-                    //cout<<v[1]<<" "<<v[0]<<endl;
                     defects[i].erase(d);
-                    //cout<<"size now = "<<defects[i].size()<<endl;
                 }
                 else {
                 int startidx=v[0];; Point ptStart( contours[i][startidx] );
                 int endidx=v[1]; Point ptEnd( contours[i][endidx] );
                 int faridx=v[2]; Point ptFar( contours[i][faridx] );
                 //Sum up all the hull and defect points to compute average
-                rough_palm_center+=ptStart+ptEnd;
-                //palm_points.push_back(ptFar);
-                palm_points.push_back(ptStart);
-                palm_points.push_back(ptEnd);
+                rough_palm_center+=ptFar+ptStart+ptEnd;
+                palm_points.push_back(ptFar);
+                //palm_points.push_back(ptStart);
+                //palm_points.push_back(ptEnd);
                 d++;
                 }
             }
             
             //Get palm center by 1st getting the average of all defect points, this is the rough palm center,
             //Then U chose the closest 3 points ang get the circle radius and center formed from them which is the palm center.
-            rough_palm_center.x/=defects.size()*2;
-            rough_palm_center.y/=defects.size()*2;
+            rough_palm_center.x/=defects[i].size()*3;
+            rough_palm_center.y/=defects[i].size()*3;
             Point closest_pt=palm_points[0];
             vector<pair<double,int> > distvec;
             for(int i=0;i<palm_points.size();i++)
@@ -178,6 +182,7 @@ void thresh_callback(int, void* )
             //The size of the palm gives the depth of the hand
             circle(drawing,palm_center,5,Scalar(144,144,255),3);
             circle(drawing,palm_center,radius,Scalar(144,144,255),2);
+            circle(drawing, rough_palm_center, 5, Scalar(144,144,255),3);
             
             //Detect fingers by finding points that form an almost isosceles triangle with certain thesholds
             int no_of_fingers=0;
@@ -189,38 +194,51 @@ void thresh_callback(int, void* )
                 int endidx=v[1]; Point ptEnd( contours[i][endidx] );
                 int faridx=v[2]; Point ptFar( contours[i][faridx] );
                 //X o--------------------------o Y
-                double Xdist=sqrt(dist(palm_center,ptFar));
-                double Ydist=sqrt(dist(palm_center,ptStart));
-                double length=sqrt(dist(ptFar,ptStart));
+//                double Xdist=sqrt(dist(palm_center,ptFar));
+//                double Ydist=sqrt(dist(palm_center,ptStart));
+//                double length=sqrt(dist(ptFar,ptStart));
+//                double retLength=sqrt(dist(ptEnd,ptFar));
+//                Scalar colors = Scalar( rng.uniform(0, 255), rng.uniform(0,255), rng.uniform(0,255) );
                 
-                double retLength=sqrt(dist(ptEnd,ptFar));
-                Scalar colors = Scalar( rng.uniform(0, 255), rng.uniform(0,255), rng.uniform(0,255) );
-                //drawContours( drawing, hullsP, i, colors, 1, 8, vector<Vec4i>(), 0, Point() );
-                line( drawing, ptEnd, ptStart, colors, 3);
-                line( drawing, ptStart, ptFar, CV_RGB(0,255,0), 1 );
-                circle( drawing, ptFar,   4, Scalar(0,255,100), 2 );
-
-                //Play with these thresholds to improve performance
-                //if(length<=3*radius&&Ydist>=0.4*radius&&length>=10&&retLength>=10&&max(length,retLength)/min(length,retLength)>=0.8)
-                //if (length<radius*2)
-                {
-
-                    if(min(Xdist,Ydist)/max(Xdist,Ydist)<=0.8)
-                    {
-                        if((Xdist>=0.1*radius&&Xdist<=1.3*radius&&Xdist<Ydist)||(Ydist>=0.1*radius&&Ydist<=1.3*radius&&Xdist>Ydist))
-                        {
-                            //line( drawing, ptEnd, ptFar, Scalar(0,255,0), 1 );
-                            no_of_fingers++;
-                            circle( drawing, ptFar,   6, Scalar(255,0,100), 2 );
-                        }
-                    }
+                //check angle between 2 possible fingers, rule out the ones that have angle > 45 (assume angle between 2 fingers < 45)
+                float angle = angleBetween(ptStart, ptEnd, ptFar);
+                cout<<"angle = "<<angle<<endl;
+                if(angle < 1) {
+                    no_of_fingers++;
+                    line( drawing, ptEnd, ptStart, colors, 3);
+                    line( drawing, ptStart, ptFar, CV_RGB(0,255,0), 1 );
+                    circle( drawing, ptFar,   4, Scalar(0,255,100), 2 );
                 }
+                
+//                //drawContours( drawing, hullsP, i, colors, 1, 8, vector<Vec4i>(), 0, Point() );
+//                line( drawing, ptEnd, ptStart, colors, 3);
+//                line( drawing, ptStart, ptFar, CV_RGB(0,255,0), 1 );
+//                circle( drawing, ptFar,   4, Scalar(0,255,100), 2 );
+//
+//                //Play with these thresholds to improve performance
+//                //if(length<=3*radius&&Ydist>=0.4*radius&&length>=10&&retLength>=10&&max(length,retLength)/min(length,retLength)>=0.8)
+//                //if (length<radius*2)
+//                {
+//
+//                    if(min(Xdist,Ydist)/max(Xdist,Ydist)<=0.8)
+//                    {
+//                        if((Xdist>=0.1*radius&&Xdist<=1.3*radius&&Xdist<Ydist)||(Ydist>=0.1*radius&&Ydist<=1.3*radius&&Xdist>Ydist))
+//                        {
+//                            //line( drawing, ptEnd, ptFar, Scalar(0,255,0), 1 );
+//                            no_of_fingers++;
+//                            circle( drawing, ptFar,   6, Scalar(255,0,100), 2 );
+//                        }
+//                    }
+//                }
                 
                 d++;
             }
             
             //no_of_fingers=min(5,no_of_fingers);
+            if (no_of_fingers >=1)
+                no_of_fingers++;
             cout<<"NO OF FINGERS: "<<no_of_fingers<<endl;
+            
             
         }
     
@@ -306,4 +324,23 @@ pair<Point,double> circleFromPoints(Point p1, Point p2, Point p3)
 	double radius = sqrt( pow(p2.x - centerx,2) + pow(p2.y-centery,2));
     
 	return make_pair(Point(centerx,centery),radius);
+}
+
+float angleBetween(const Point &p1, const Point &p2, const Point &center)
+{
+    Point v1 = p1 - center;
+    Point v2 = p2 - center;
+    float len1 = sqrt(v1.x * v1.x + v1.y * v1.y);
+    float len2 = sqrt(v2.x * v2.x + v2.y * v2.y);
+    
+    float dot = v1.x * v2.x + v1.y * v2.y;
+    
+    float a = dot / (len1 * len2);
+    
+    if (a >= 1.0)
+        return 0.0;
+    else if (a <= -1.0)
+        return 180;
+    else
+        return acos(a); // 0..PI
 }
