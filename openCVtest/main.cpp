@@ -9,6 +9,7 @@
 #include <opencv2/opencv.hpp>
 #include "opencv2/highgui/highgui.hpp"
 #include "opencv2/imgproc/imgproc.hpp"
+#include <opencv2/video/tracking.hpp>
 #include <iostream>
 #include <stdio.h>
 #include <stdlib.h>
@@ -22,6 +23,7 @@ int thresh = 100;
 int max_thresh = 255;
 RNG rng(12345);
 vector<pair<Point,double> > palm_centers;
+pair<float, float> angleAndAveLen (const Point &v1, const Point &v2);
 
 /// Function header
 void thresh_callback(int, void* );
@@ -30,10 +32,12 @@ double dist(Point x,Point y);
 pair<Point,double> circleFromPoints(Point p1, Point p2, Point p3);
 float angleBetween(const Point &p1, const Point &p2, const Point &center);
 
+
 int main(int argc, const char * argv[])
 {
     
-    src = imread( "/Users/lucylin/Dropbox/class/VI/img/med_4.jpg", 1 );
+    src = imread( "/Users/lucylin/Dropbox/class/VI/img/set1/fist_1.jpg", 1 );
+    //denoise original image
     resize(src, src, Size(src.cols/4, src.rows/4));
     cvtColor( src, src_gray, CV_BGR2GRAY );
     blur( src_gray, src_gray, Size(5,5) );
@@ -41,12 +45,10 @@ int main(int argc, const char * argv[])
     erode(src_bw, src_bw, Mat(), Point(-1, -1), 3);
     dilate(src_bw, src_bw, Mat());
     blur( src_bw, src_bw, Size(3,3) );
+    
     //set 4 boundaries to 0 so that we can have closed contour
     copyMakeBorder( src_bw, src_bw, 4, 4, 4, 4, BORDER_CONSTANT, Scalar(0,0,0) );
-    
-    namedWindow( "Source", CV_WINDOW_AUTOSIZE );
-    imshow( "Source", src );
-    
+//    showImage(src, "Source")
     showImage(src_bw, "bw");
     
     createTrackbar( " Canny thresh:", "Source", &thresh, max_thresh, thresh_callback );
@@ -56,6 +58,8 @@ int main(int argc, const char * argv[])
     
     waitKey(0);
     return 0;
+    
+
 }
 
 void thresh_callback(int, void* )
@@ -79,10 +83,6 @@ void thresh_callback(int, void* )
         drawContours( drawing, contours, i, color, 1, 8, hierarchy, 0, Point() );
     }
     
-    /// Show in a window
-    namedWindow( "Contours", CV_WINDOW_AUTOSIZE );
-    imshow( "Contours", drawing );
-    
     // Find the convex hull object and defects for "each" contour
     vector<vector<Point> >hullsP( contours.size() );
     vector<vector<Vec4i> >defects( contours.size() );
@@ -93,21 +93,6 @@ void thresh_callback(int, void* )
         if (contours[i].size() < 500)
             continue;
         convexHull(Mat(contours[i]), hullsI[i], false, false);
-        //if a segment is too short, remove it.
-//        vector<int>::iterator iter =hullsI[i].begin();
-//        int last = hullsI[i][0];
-//        iter++;
-//        while( iter!=hullsI[i].end() )
-//        {
-//            if(last-*iter <  5)
-//            {
-//                hullsI[i].erase(iter);
-//            } else {
-//                last = *iter;
-//                iter++;
-//            }
-//            cout<<hullsI[i].size()<<endl;
-//        }
         
         //////////////////////////////////////////////////////
         //delete noisy convex defects, try to find palm center
@@ -123,7 +108,7 @@ void thresh_callback(int, void* )
             while( d!=defects[i].end() )
             {
                 Vec4i& v=(*d);
-                if(abs(v[1]-v[0]) < 5) {
+                if(abs(v[1]-v[0]) < 5 || v[3]/256 < 5) {
                     defects[i].erase(d);
                 }
                 else {
@@ -133,8 +118,8 @@ void thresh_callback(int, void* )
                 //Sum up all the hull and defect points to compute average
                 rough_palm_center+=ptFar+ptStart+ptEnd;
                 palm_points.push_back(ptFar);
-                //palm_points.push_back(ptStart);
-                //palm_points.push_back(ptEnd);
+//                palm_points.push_back(ptStart);
+//                palm_points.push_back(ptEnd);
                 d++;
                 }
             }
@@ -190,7 +175,7 @@ void thresh_callback(int, void* )
             while( d!=defects[i].end() )
             {
                 Vec4i& v=(*d);
-                int startidx=v[0];; Point ptStart( contours[i][startidx] );
+                int startidx=v[0]; Point ptStart( contours[i][startidx] );
                 int endidx=v[1]; Point ptEnd( contours[i][endidx] );
                 int faridx=v[2]; Point ptFar( contours[i][faridx] );
                 //X o--------------------------o Y
@@ -198,7 +183,7 @@ void thresh_callback(int, void* )
 //                double Ydist=sqrt(dist(palm_center,ptStart));
 //                double length=sqrt(dist(ptFar,ptStart));
 //                double retLength=sqrt(dist(ptEnd,ptFar));
-//                Scalar colors = Scalar( rng.uniform(0, 255), rng.uniform(0,255), rng.uniform(0,255) );
+                Scalar colors = Scalar( rng.uniform(0, 255), rng.uniform(0,255), rng.uniform(0,255) );
                 
                 //check angle between 2 possible fingers, rule out the ones that have angle > 45 (assume angle between 2 fingers < 45)
                 float angle = angleBetween(ptStart, ptEnd, ptFar);
@@ -235,9 +220,64 @@ void thresh_callback(int, void* )
             }
             
             //no_of_fingers=min(5,no_of_fingers);
-            if (no_of_fingers >=1)
+            if (no_of_fingers >=1) {
                 no_of_fingers++;
-            cout<<"NO OF FINGERS: "<<no_of_fingers<<endl;
+                cout<<"NO OF FINGERS: "<<no_of_fingers<<endl;
+            }
+            //may be fist, one finger or nothing
+            else {
+                cout<<"may be fist, one finger or nothing"<<endl;
+                float minDist = 99999;
+                Vector<Vec4i> singleFinger;
+                pair<Vec4i, Vec4i> closestPair;
+//                int closestPair;
+                Vec4i lastv = defects[i][defects[i].size()-1];
+                for(int j = 0; j<defects[i].size(); j++)
+                {
+                    int faridx_1=lastv[2]; Point ptFar1( contours[i][faridx_1] );
+                    Vec4i v2 = defects[i][j];
+                    int faridx_2=v2[2]; Point ptFar2( contours[i][faridx_2] );
+                    float dis = dist(ptFar1, ptFar2);
+                    if(dis < minDist) {
+                        minDist = dis;
+                        closestPair = make_pair(lastv, v2);
+                    }
+                    lastv = v2;
+                }
+                
+                //check angle between 2 possible fingers, they should be almost parallel
+                Point p11( contours[i][closestPair.first[0]]);
+                Point p12( contours[i][closestPair.first[1]]);
+                Point p13( contours[i][closestPair.first[2]]);
+                circle( drawing, p13,   6, Scalar(255,255,100), 2 );
+                circle( drawing, p11,   6, Scalar(255,255,100), 2 );
+                
+                Point p21( contours[i][closestPair.second[0]]);
+                Point p22( contours[i][closestPair.second[1]]);
+                Point p23( contours[i][closestPair.second[2]]);
+                circle( drawing, p23,   6, Scalar(255,255,100), 2 );
+                circle( drawing, p21,   6, Scalar(255,255,100), 2 );
+                circle( drawing, Point (10, 20),   6, Scalar(255,255,255), 2 );
+
+                pair< float, float > pair1 = angleAndAveLen(p12-p13, p21-p23);
+                pair< float, float > pair2 = angleAndAveLen(p11-p13, p22-p23);
+                cout << "radius = "<<radius <<endl;
+                cout << pair1.first<<" "<<pair1.second<<endl;
+                cout << pair2.first<<" "<<pair2.second<<endl;
+                
+                //also, the finger length has to fall between 0.5~1.5 palm radius
+                
+                
+                if((pair1.first < 0.5 && pair1.second < radius * 1.5 && pair1.second > radius * 0.5)
+                   || (pair2.first < 0.5 && pair2.second < radius * 1.5 && pair2.second > radius * 0.5)) {
+                    cout<<"#finger = 1";
+                    //reassess palm center ?
+                    
+                }
+                else
+                    cout<<"fist or others";
+                
+            }
             
             
         }
@@ -256,7 +296,7 @@ void thresh_callback(int, void* )
         //drawContours( hullDrawing, hullsP, i, color, 1, 8, vector<Vec4i>(), 0, Point() );
         
         size_t count = contours[i].size();
-        std::cout<<"Count : "<<count<<std::endl;
+        std::cout<<"contour size : "<<count<<std::endl;
         if( count < 300 )
             continue;
         vector<Vec4i>::iterator d =defects[i].begin();
@@ -274,7 +314,7 @@ void thresh_callback(int, void* )
             
             //if(depth > 30 && depth < 300 )
             //{
-                cout<<depth<<endl;
+                cout<<"depth = "<<depth<<endl;
 
                 line( hullDrawing, ptStart, ptFar, CV_RGB(0,255,0), 2 );
                 line( hullDrawing, ptEnd, ptFar, CV_RGB(0,255,0), 1 );
@@ -343,4 +383,58 @@ float angleBetween(const Point &p1, const Point &p2, const Point &center)
         return 180;
     else
         return acos(a); // 0..PI
+}
+
+pair<float, float> angleAndAveLen (const Point &v1, const Point &v2)
+{
+    float len1 = sqrt(v1.x * v1.x + v1.y * v1.y);
+    float len2 = sqrt(v2.x * v2.x + v2.y * v2.y);
+    
+    float dot = v1.x * v2.x + v1.y * v2.y;
+    
+    float a = dot / (len1 * len2);
+    
+    if (a >= 1.0)
+        return make_pair(0.0, (len1+len2)/2);
+    else if (a <= -1.0)
+        return make_pair(180, (len1+len2)/2);
+    else
+        return make_pair(acos(a), (len1+len2)/2); // 0..PI
+
+}
+
+void loadCamera()
+{
+//    VideoCapture cap(0);
+//    
+//    cap.open(0);
+//    cap.set(CV_CAP_PROP_FRAME_WIDTH,640);
+//    cap.set(CV_CAP_PROP_FRAME_HEIGHT,480);
+//    
+//    if( !cap.isOpened() )
+//    {
+//        cerr << "***Could not initialize capturing...***\n";
+//        cerr << "Current parameter's value: \n";
+//        return -1;
+//    }
+//    
+//    int CAMERA_CHECK_ITERATIONS = 40;
+//    while (true) {
+//        
+//        Mat cameraFrame;
+//        cap >> cameraFrame;
+//        if ( cameraFrame.total() > 0 ) {
+//            Mat displayFrame( cameraFrame.size(), CV_8UC3 );
+//            //doSomething( cameraFrame, displayFrame );
+//            imshow("Image", displayFrame );
+//        } else {
+//            cout << "::: Accessing camera :::" << endl;
+//            if ( CAMERA_CHECK_ITERATIONS > 0 ) CAMERA_CHECK_ITERATIONS--;
+//            if ( CAMERA_CHECK_ITERATIONS < 0 ) break;
+//        }
+//        
+//        
+//        int key = waitKey(200);
+//        if (key == 27) break;
+//    }
 }
